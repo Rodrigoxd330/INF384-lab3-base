@@ -1,79 +1,62 @@
 name: infra
 
-# Pipeline de infraestructura. Es dueno de la existencia y la configuracion
-# de la funcion, y no toca la imagen.
-
 on:
   pull_request:
     paths:
       - 'infra/**'
+
   push:
     branches:
       - main
     paths:
       - 'infra/**'
+
   workflow_dispatch:
+    inputs:
+      allow_destroy:
+        description: 'Autorizar destrucciones/reemplazos del plan'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  pull-requests: write
 
 jobs:
 
-  # TODO
-  # Verificar la sintaxis y la integridad del codigo de infraestructura:
-  # formato, inicializacion contra el backend remoto y validacion.
-  # Condicion de detencion: cualquiera de las tres comprobaciones falla.
-  # La configuracion del backend no esta en el codigo: llega por archivo.
-  # Sustituir el paso centinela por la implementacion.
   validar:
-  runs-on: ubuntu-latest
+    runs-on: ubuntu-latest
 
-  defaults:
-    run:
-      working-directory: infra
+    defaults:
+      run:
+        working-directory: infra
 
-  steps:
-    - name: Checkout
-      uses: actions/checkout@v6
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
 
-    - name: Configurar credenciales AWS
-      uses: aws-actions/configure-aws-credentials@v4
-      with:
-        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
-        aws-region: us-east-1
+      - name: Configurar credenciales AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: us-east-1
 
-    - name: Instalar Terraform
-      uses: hashicorp/setup-terraform@v3
+      - name: Instalar Terraform
+        uses: hashicorp/setup-terraform@v3
 
-    - name: Verificar formato
-      run: terraform fmt -check
+      - name: Verificar formato
+        run: terraform fmt -check
 
-    - name: Inicializar Terraform
-      run: terraform init -backend-config=backend.hcl
+      - name: Inicializar Terraform
+        run: terraform init -backend-config=backend.hcl
 
-    - name: Validar Terraform
-      run: terraform validate
+      - name: Validar Terraform
+        run: terraform validate
 
-  # TODO
-  # Analizar el codigo declarado contra politicas de infraestructura.
-  #
-  # Condicion de detencion: un hallazgo de severidad alta o critica, salvo
-  # que este anotado como aceptado junto al recurso que lo origina, con
-  # identificador, razon, responsable y fecha de vencimiento.
-  #
-  # infra/main.tf ya trae una de esas anotaciones, sobre un hallazgo de
-  # severidad alta que no se puede corregir sin romper el diseno del pipeline
-  # de aplicacion. Leerla: es la forma que tiene que tener cualquier excepcion
-  # que ustedes agreguen. Y es el modo de comprobar que esta compuerta quedo
-  # bien armada: si detiene igual, la esta ignorando.
-  #
-  # El vencimiento no es decorativo: pasada esa fecha el hallazgo vuelve a
-  # contar y el pipeline se detiene solo.
-  #
-  # A diferencia de las compuertas del pipeline de aplicacion, esta detiene.
-  # Preferir una action del marketplace antes que instalar la herramienta.
-  # La guia del laboratorio lista las referencias disponibles.
-  #
-  # Sustituir el paso centinela por la implementacion.
+
   politicas:
     runs-on: ubuntu-latest
 
@@ -89,33 +72,7 @@ jobs:
           severity: HIGH,CRITICAL
           exit-code: '1'
 
-  # TODO
-  # Calcular el plan, guardarlo en disco y exportarlo a tfplan.json.
-  # El plan que se aplica despues es el guardado aca, no uno recalculado.
-  #
-  # Sobre tfplan.json se implementan dos reglas. Las dos miran el efecto
-  # calculado del cambio, no el codigo fuente. Un analisis del codigo no
-  # puede responder si el plan destruye algo: eso depende del estado actual,
-  # no de lo declarado.
-  #
-  # Regla 1 · Ninguna accion de destruccion sin autorizacion.
-  #   El job falla si algun resource_change incluye la accion delete.
-  #   Un reemplazo cuenta como destruccion: el recurso que existia deja de
-  #   existir.
-  #   La autorizacion es deliberadamente incomoda. No puede venir del codigo
-  #   ni del propio plan, porque entonces la daria el mismo cambio que se
-  #   quiere controlar. Tiene que ser un acto humano y explicito, fuera del
-  #   disparo automatico.
-  #
-  # Regla 2 · El plan se publica en el pull request, en texto legible, para
-  #   que quien revisa vea la diferencia exacta antes de aprobar. Esta regla
-  #   no detiene: informa. Conviene que corra antes que la regla 1, para que
-  #   el plan quede visible aunque la compuerta detenga.
-  #
-  # Condicion de detencion: regla 1 incumplida. Esta compuerta detiene, y
-  # con ella el job aplicar no llega a ejecutarse.
-  #
-  # Sustituir el paso centinela por la implementacion.
+
   plan:
     needs: [validar, politicas]
     runs-on: ubuntu-latest
@@ -212,11 +169,6 @@ jobs:
           if-no-files-found: error
 
 
-  # TODO
-  # Aplicar el plan que produjo el job anterior, sin recalcularlo.
-  # Corre solo desde la rama principal y solo si la compuerta del plan paso.
-  # Condicion de detencion: el apply falla.
-  # Sustituir el paso centinela por la implementacion.
   aplicar:
     needs: plan
 
