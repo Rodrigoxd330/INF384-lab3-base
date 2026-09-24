@@ -1,5 +1,3 @@
-CMD ["src/handler.handler"]
-
 # Dockerfile del repositorio base.
 # Contiene cinco malas practicas deliberadas. Cada una lleva su numero en la
 # linea anterior. Corregirlas es el bloque A1 de la guia del laboratorio.
