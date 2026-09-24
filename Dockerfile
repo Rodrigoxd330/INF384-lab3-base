@@ -1,20 +1,24 @@
-# Dockerfile del repositorio base.
-# Contiene cinco malas practicas deliberadas. Cada una lleva su numero en la
-# linea anterior. Corregirlas es el bloque A1 de la guia del laboratorio.
+# Etapa 1: instalación de dependencias
+FROM public.ecr.aws/lambda/nodejs:20 AS builder
 
-# defecto 1
-FROM public.ecr.aws/lambda/nodejs:latest
+WORKDIR ${LAMBDA_TASK_ROOT}
 
-# defecto 2
-COPY . .
+# Copiar primero los archivos de dependencias para aprovechar la caché
+COPY package.json package-lock.json ./
 
-# defecto 3
-RUN npm install
+# Instalación reproducible usando el lock file
+RUN npm ci --omit=dev
 
-# defecto 4
-ENV DB_PASSWORD="inf384-clave-en-texto-plano"
 
-# defecto 5
-RUN dnf install -y procps-ng vim && dnf clean all
+# Etapa 2: imagen final
+FROM public.ecr.aws/lambda/nodejs:20
+
+WORKDIR ${LAMBDA_TASK_ROOT}
+
+# Copiar únicamente lo necesario desde la etapa de construcción
+COPY --from=builder ${LAMBDA_TASK_ROOT}/node_modules ./node_modules
+
+# Copiar el código de la aplicación
+COPY src ./src
 
 CMD ["src/handler.handler"]
