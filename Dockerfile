@@ -1,24 +1,30 @@
-# Etapa 1: instalación de dependencias
-FROM public.ecr.aws/lambda/nodejs:20 AS builder
+CMD ["src/handler.handler"]
 
-WORKDIR ${LAMBDA_TASK_ROOT}
+# Dockerfile del repositorio base.
+# Contiene cinco malas practicas deliberadas. Cada una lleva su numero en la
+# linea anterior. Corregirlas es el bloque A1 de la guia del laboratorio.
 
-# Copiar primero los archivos de dependencias para aprovechar la caché
+# Etapa de construccion
+FROM public.ecr.aws/lambda/nodejs:20 AS build
+
+WORKDIR /build
+
+# Copiar primero los archivos de dependencias
 COPY package.json package-lock.json ./
 
-# Instalación reproducible usando el lock file
-RUN npm ci --omit=dev
+# Instalacion reproducible desde el lock file
+RUN npm ci
 
-
-# Etapa 2: imagen final
-FROM public.ecr.aws/lambda/nodejs:20
-
-WORKDIR ${LAMBDA_TASK_ROOT}
-
-# Copiar únicamente lo necesario desde la etapa de construcción
-COPY --from=builder ${LAMBDA_TASK_ROOT}/node_modules ./node_modules
-
-# Copiar el código de la aplicación
+# Copiar solo el codigo necesario
 COPY src ./src
 
-CMD ["src/handler.handler"]
+### NO TOCAR DE ACA EN ADELANTE, CONSIDEREN QUE EL WORKDIR DEBE SER /build
+RUN npx esbuild src/handler.js \
+      --bundle --platform=node --target=node20 \
+      --outfile=dist/handler.js
+
+# Etapa final: recibe unicamente el artefacto empaquetado.
+# El arbol de node_modules se queda en la etapa anterior.
+FROM public.ecr.aws/lambda/nodejs:20 AS runtime
+COPY --from=build /build/dist/handler.js ${LAMBDA_TASK_ROOT}/
+CMD ["handler.handler"]
