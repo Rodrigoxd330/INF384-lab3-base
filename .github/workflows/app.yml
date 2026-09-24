@@ -205,13 +205,93 @@ jobs:
   #   digest: # TODO
   #
   # Sustituir el paso centinela por la implementacion.
-  publicar:
+publicar:
+    needs:
+      - calidad
+      - secretos
+      - dependencias
+      - estatico
+
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+
+    outputs:
+      digest: ${{ steps.salida.outputs.digest }}
+
     steps:
-      - name: Sin implementar
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Credenciales temporales
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token:     ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: us-east-1
+
+      - name: Login en Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Configurar Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Obtener SHA corto
+        id: vars
+        run: echo "sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - name: Construir y publicar imagen
+        env:
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          APP: inf384-lab3
+          SHA: ${{ steps.vars.outputs.sha }}
         run: |
-          echo "::error::El job 'publicar' no esta implementado."
-          exit 1
+          docker buildx build \
+            --platform linux/amd64 \
+            --label org.opencontainers.image.title="$APP" \
+            --tag "$REGISTRY/$APP:$SHA" \
+            --push \
+            .
+
+      - name: Obtener digest publicado
+        id: imagen
+        env:
+          APP: inf384-lab3
+          SHA: ${{ steps.vars.outputs.sha }}
+        run: |
+          DIGEST=$(aws ecr describe-images \
+            --repository-name "$APP" \
+            --image-ids imageTag="$SHA" \
+            --query 'imageDetails[0].imageDigest' \
+            --output text)
+
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+
+      - name: Apuntar tag prd al mismo manifiesto
+        env:
+          APP: inf384-lab3
+          SHA: ${{ steps.vars.outputs.sha }}
+        run: |
+          MANIFEST=$(aws ecr batch-get-image \
+            --repository-name "$APP" \
+            --image-ids imageTag="$SHA" \
+            --query 'images[0].imageManifest' \
+            --output text)
+
+          aws ecr put-image \
+            --repository-name "$APP" \
+            --image-tag prd \
+            --image-manifest "$MANIFEST"
+
+      - name: Exponer digest completo
+        id: salida
+        env:
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          APP: inf384-lab3
+          DIGEST: ${{ steps.imagen.outputs.digest }}
+        run: |
+          echo "digest=$REGISTRY/$APP@$DIGEST" >> "$GITHUB_OUTPUT"
 
   # Este job viene completo y no se modifica.
   # Las estrategias de despliegue y la verificacion posterior son contenido
