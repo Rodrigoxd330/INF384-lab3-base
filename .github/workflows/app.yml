@@ -205,7 +205,7 @@ jobs:
   #   digest: # TODO
   #
   # Sustituir el paso centinela por la implementacion.
-publicar:
+  publicar:
     needs:
       - calidad
       - secretos
@@ -216,11 +216,11 @@ publicar:
     runs-on: ubuntu-latest
 
     outputs:
-      digest: ${{ steps.salida.outputs.digest }}
+      digest: ${{ steps.imagen.outputs.uri }}
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Credenciales temporales
         uses: aws-actions/configure-aws-credentials@v4
@@ -234,64 +234,49 @@ publicar:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Configurar Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
       - name: Obtener SHA corto
-        id: vars
-        run: echo "sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+        id: sha
+        shell: bash
+        run: echo "short=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
 
       - name: Construir y publicar imagen
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64
+          tags: |
+            ${{ steps.login-ecr.outputs.registry }}/inf384-lab3:${{ steps.sha.outputs.short }}
+          labels: |
+            org.opencontainers.image.title=app
+
+      - name: Crear tag de ambiente
+        shell: bash
         env:
           REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          APP: inf384-lab3
-          SHA: ${{ steps.vars.outputs.sha }}
-        run: |
-          docker buildx build \
-            --platform linux/amd64 \
-            --label org.opencontainers.image.title="$APP" \
-            --tag "$REGISTRY/$APP:$SHA" \
-            --push \
-            .
-
-      - name: Obtener digest publicado
-        id: imagen
-        env:
-          APP: inf384-lab3
-          SHA: ${{ steps.vars.outputs.sha }}
-        run: |
-          DIGEST=$(aws ecr describe-images \
-            --repository-name "$APP" \
-            --image-ids imageTag="$SHA" \
-            --query 'imageDetails[0].imageDigest' \
-            --output text)
-
-          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
-
-      - name: Apuntar tag prd al mismo manifiesto
-        env:
-          APP: inf384-lab3
-          SHA: ${{ steps.vars.outputs.sha }}
+          REPOSITORY: inf384-lab3
+          DIGEST: ${{ steps.build.outputs.digest }}
         run: |
           MANIFEST=$(aws ecr batch-get-image \
-            --repository-name "$APP" \
-            --image-ids imageTag="$SHA" \
+            --repository-name "$REPOSITORY" \
+            --image-ids imageDigest="$DIGEST" \
             --query 'images[0].imageManifest' \
             --output text)
 
           aws ecr put-image \
-            --repository-name "$APP" \
+            --repository-name "$REPOSITORY" \
             --image-tag prd \
             --image-manifest "$MANIFEST"
 
-      - name: Exponer digest completo
-        id: salida
+      - name: Exponer digest
+        id: imagen
+        shell: bash
         env:
           REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          APP: inf384-lab3
-          DIGEST: ${{ steps.imagen.outputs.digest }}
+          DIGEST: ${{ steps.build.outputs.digest }}
         run: |
-          echo "digest=$REGISTRY/$APP@$DIGEST" >> "$GITHUB_OUTPUT"
+          echo "uri=${REGISTRY}/inf384-lab3@${DIGEST}" >> "$GITHUB_OUTPUT"
 
   # Este job viene completo y no se modifica.
   # Las estrategias de despliegue y la verificacion posterior son contenido
