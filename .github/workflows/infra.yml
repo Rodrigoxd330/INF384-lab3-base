@@ -23,12 +23,35 @@ jobs:
   # La configuracion del backend no esta en el codigo: llega por archivo.
   # Sustituir el paso centinela por la implementacion.
   validar:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Sin implementar
-        run: |
-          echo "::error::El job 'validar' no esta implementado."
-          exit 1
+  runs-on: ubuntu-latest
+
+  defaults:
+    run:
+      working-directory: infra
+
+  steps:
+    - name: Checkout
+      uses: actions/checkout@v6
+
+    - name: Configurar credenciales AWS
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+        aws-region: us-east-1
+
+    - name: Instalar Terraform
+      uses: hashicorp/setup-terraform@v3
+
+    - name: Verificar formato
+      run: terraform fmt -check
+
+    - name: Inicializar Terraform
+      run: terraform init -backend-config=backend.hcl
+
+    - name: Validar Terraform
+      run: terraform validate
 
   # TODO
   # Analizar el codigo declarado contra politicas de infraestructura.
@@ -53,11 +76,18 @@ jobs:
   # Sustituir el paso centinela por la implementacion.
   politicas:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Sin implementar
-        run: |
-          echo "::error::El job 'politicas' no esta implementado."
-          exit 1
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Analizar infraestructura como codigo
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: config
+          scan-ref: infra
+          severity: HIGH,CRITICAL
+          exit-code: '1'
 
   # TODO
   # Calcular el plan, guardarlo en disco y exportarlo a tfplan.json.
@@ -89,11 +119,98 @@ jobs:
   plan:
     needs: [validar, politicas]
     runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: infra
+
     steps:
-      - name: Sin implementar
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Configurar credenciales AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: us-east-1
+
+      - name: Instalar Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Inicializar Terraform
+        run: terraform init -backend-config=backend.hcl
+
+      - name: Calcular plan
+        run: terraform plan -out=tfplan
+
+      - name: Exportar plan a JSON
+        run: terraform show -json tfplan > tfplan.json
+
+      - name: Exportar plan legible
+        run: terraform show -no-color tfplan > tfplan.txt
+
+      - name: Publicar plan en el pull request
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+
+            let plan = fs.readFileSync('infra/tfplan.txt', 'utf8');
+
+            // Evita exceder el limite de comentarios de GitHub.
+            if (plan.length > 60000) {
+              plan = plan.substring(0, 60000) +
+                '\n\n... plan truncado por limite del comentario.';
+            }
+
+            const body = `### Terraform plan
+
+            \`\`\`terraform
+            ${plan}
+            \`\`\`
+            `;
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body
+            });
+
+      - name: Verificar destrucciones
+        env:
+          ALLOW_DESTROY: ${{ github.event_name == 'workflow_dispatch' && inputs.allow_destroy }}
         run: |
-          echo "::error::El job 'plan' no esta implementado."
-          exit 1
+          DELETE_COUNT=$(jq '
+            [
+              .resource_changes[]?
+              | select(.change.actions | index("delete"))
+            ]
+            | length
+          ' tfplan.json)
+
+          echo "Recursos con destruccion o reemplazo: $DELETE_COUNT"
+
+          if [ "$DELETE_COUNT" -gt 0 ] && [ "$ALLOW_DESTROY" != "true" ]; then
+            echo "::error::El plan contiene acciones delete y no existe autorizacion explicita."
+            exit 1
+          fi
+
+      - name: Guardar plan
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-plan
+          path: |
+            infra/tfplan
+            infra/tfplan.json
+          if-no-files-found: error
+
 
   # TODO
   # Aplicar el plan que produjo el job anterior, sin recalcularlo.
@@ -102,10 +219,40 @@ jobs:
   # Sustituir el paso centinela por la implementacion.
   aplicar:
     needs: plan
+
     if: github.ref == 'refs/heads/main'
+
     runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: infra
+
     steps:
-      - name: Sin implementar
-        run: |
-          echo "::error::El job 'aplicar' no esta implementado."
-          exit 1
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Configurar credenciales AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: us-east-1
+
+      - name: Instalar Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Inicializar Terraform
+        run: terraform init -backend-config=backend.hcl
+
+      - name: Descargar plan
+        uses: actions/download-artifact@v4
+        with:
+          name: terraform-plan
+          path: infra
+
+      - name: Aplicar plan guardado
+        run: terraform apply -auto-approve tfplan
